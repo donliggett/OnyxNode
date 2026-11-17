@@ -1,0 +1,14 @@
+# Local recordings and the collector's store. The regression suite
+# (onyx_suite/) is NOT ignored: cases are meant to be committed.
+.onyx/
+
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+CLAUDE.local.md
+.claude/

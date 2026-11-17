@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OnyxNode</title>
+<!--
+  OnyxNode timeline UI. One file, no build step, no dependencies; served by the
+  collector at "/". Everything recorded (tool output, model text) is untrusted,
+  so it is only ever put on the page with textContent, never as HTML.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --raised: #ffffff; --sunk: #f0efec;
+  --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
+  --line: #e1e0d9; --line-2: #c3c2b7; --ring: rgba(11,11,11,.10);
+  --tool: #2a78d6; --llm: #eb6834; --decision: #1baf7a; --other: #898781;
+  --good: #0ca30c; --good-ink: #006300; --warn: #fab219; --serious: #ec835a; --crit: #d03b3b;
+  --warn-wash: #fdf3d6; --crit-wash: #fbe6e6; --good-wash: #e3f4e3; --sel: #e9f1fc;
+  --accent: #2a78d6;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --raised: #222221; --sunk: #141413;
+    --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #898781;
+    --line: #2c2c2a; --line-2: #383835; --ring: rgba(255,255,255,.10);
+    --tool: #3987e5; --llm: #d95926; --decision: #199e70;
+    --good-ink: #0ca30c;
+    --warn-wash: #33290d; --crit-wash: #3a1818; --good-wash: #12301a; --sel: #17283f;
+    --accent: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --raised: #222221; --sunk: #141413;
+  --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #898781;
+  --line: #2c2c2a; --line-2: #383835; --ring: rgba(255,255,255,.10);
+  --tool: #3987e5; --llm: #d95926; --decision: #199e70;
+  --good-ink: #0ca30c;
+  --warn-wash: #33290d; --crit-wash: #3a1818; --good-wash: #12301a; --sel: #17283f;
+  --accent: #3987e5;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--ink-3); }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---- frame */
+.app { display: grid; grid-template-rows: 48px 1fr; height: 100%; }
+.top { display: flex; align-items: center; gap: 12px; padding: 0 16px;
+  background: var(--surface); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 650; letter-spacing: .01em; }
+.brand svg { display: block; }
+.brand small { font-weight: 400; color: var(--ink-3); font-size: 13px; }
+.top .grow { flex: 1; }
+.conn { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.conn i { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+.conn.down i { background: var(--crit); }
+.shell { display: grid; grid-template-columns: 320px 1fr; min-height: 0; }
+.side { display: flex; flex-direction: column; min-height: 0; background: var(--surface);
+  border-right: 1px solid var(--line); }
+.main { overflow: auto; padding: 20px 24px 60px; min-width: 0; }
+@media (max-width: 860px) {
+  .app { height: auto; }
+  .shell { grid-template-columns: 1fr; }
+  .side { border-right: 0; border-bottom: 1px solid var(--line); max-height: 45vh; }
+  .main { padding: 16px; }
+}
+
+/* ---- controls */
+.btn { background: var(--raised); border: 1px solid var(--line-2); border-radius: 6px;
+  padding: 5px 11px; white-space: nowrap; }
+.btn:hover { border-color: var(--ink-3); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.on { background: var(--sel); border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.icon { padding: 5px 8px; min-width: 32px; }
+.field { background: var(--raised); border: 1px solid var(--line-2); border-radius: 6px; padding: 5px 9px; }
+
+/* ---- sidebar */
+.side-head { padding: 12px; border-bottom: 1px solid var(--line); }
+.side-head input { width: 100%; }
+.runs { flex: 1; overflow: auto; }
+.run-row { display: grid; grid-template-columns: 22px 1fr; gap: 6px; padding: 9px 12px;
+  border-bottom: 1px solid var(--line); cursor: pointer; }
+.run-row:hover { background: var(--sunk); }
+.run-row.current { background: var(--sel); }
+.run-row input { margin: 3px 0 0; }
+.run-name { display: flex; align-items: center; gap: 6px; font-weight: 600; min-width: 0; }
+.run-name span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-meta { color: var(--ink-2); font-size: 12px; }
+.run-id { color: var(--ink-3); }
+.compare { padding: 10px 12px; border-top: 1px solid var(--line); display: flex;
+  align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
+.compare .btn { margin-left: auto; }
+
+/* ---- badges */
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; line-height: 16px; border: 1px solid var(--ring);
+  background: var(--sunk); color: var(--ink-2); white-space: nowrap; }
+.badge.ok, .badge.good { background: var(--good-wash); color: var(--good-ink); }
+.badge.error, .badge.bad { background: var(--crit-wash); color: var(--crit); }
+.badge.running { background: var(--warn-wash); color: var(--ink); }
+.kind { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2);
+  white-space: nowrap; }
+.kind i { width: 9px; height: 9px; border-radius: 3px; background: var(--other); flex: none; }
+.kind.tool_call i { background: var(--tool); }
+.kind.llm_call i { background: var(--llm); }
+.kind.decision i { background: var(--decision); border-radius: 50%; }
+
+/* ---- run view */
+h1 { font-size: 20px; margin: 0; font-weight: 650; }
+.head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.head .grow { flex: 1; }
+.sub { color: var(--ink-3); margin-bottom: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;
+  margin-bottom: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.tile .l { font-size: 12px; color: var(--ink-2); }
+.tile .v { font-size: 20px; font-weight: 600; margin-top: 2px; }
+.tile .d { font-size: 12px; color: var(--ink-2); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.card-head { display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border-bottom: 1px solid var(--line); font-weight: 600; flex-wrap: wrap; }
+.card-head .grow { flex: 1; }
+
+/* ---- time track */
+.track { padding: 12px 14px 8px; }
+.lanes { display: grid; grid-template-columns: 76px 1fr; row-gap: 4px; align-items: center; }
+.lane-l { font-size: 12px; color: var(--ink-2); }
+.lane { position: relative; height: 22px; background: var(--sunk); border-radius: 4px; }
+.mark { position: absolute; top: 0; height: 22px; min-width: 14px; padding: 5px 0; margin: 0;
+  background: none; border: 0; }
+.mark i { display: block; height: 12px; border-radius: 4px; background: var(--other); margin: 0 1px; }
+.mark.tool_call i { background: var(--tool); }
+.mark.llm_call i { background: var(--llm); }
+.mark.decision i { background: var(--decision); width: 10px; height: 10px; border-radius: 50%; margin: 1px auto; }
+.mark.err i { background: var(--crit); }
+.mark.sel i { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
+.mark:hover i { filter: brightness(1.12); }
+.mark.future i { opacity: .25; }
+.cursor { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink);
+  pointer-events: none; z-index: 2; }
+.axis { position: relative; height: 18px; margin-top: 2px; border-top: 1px solid var(--line-2); }
+.axis span { position: absolute; top: 3px; white-space: nowrap; font-size: 11px; color: var(--ink-3); transform: translateX(-50%); }
+.axis span:first-child { transform: none; }
+.axis span:last-child { transform: translateX(-100%); }
+.replay { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--line);
+  flex-wrap: wrap; }
+.replay input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); }
+.replay .readout { font-size: 12px; color: var(--ink-2); min-width: 250px; }
+.tip { position: fixed; z-index: 20; pointer-events: none; background: var(--raised); color: var(--ink);
+  border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 9px; font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.18); max-width: 320px; }
+.tip b { display: block; }
+
+/* ---- steps + detail */
+.cols { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 16px; margin-top: 16px;
+  align-items: start; }
+@media (max-width: 1180px) { .cols { grid-template-columns: 1fr; } }
+.step { display: grid; grid-template-columns: 30px 62px 92px minmax(0, 1fr) auto; gap: 8px;
+  align-items: baseline; padding: 7px 12px; border: 0; border-bottom: 1px solid var(--line);
+  width: 100%; text-align: left; background: none; }
+.step:last-child { border-bottom: 0; }
+.step:hover { background: var(--sunk); }
+.step.sel { background: var(--sel); }
+.step.future { opacity: .35; }
+.step .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step .pv { display: block; font-weight: 400; color: var(--ink-2); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step .rt { font-size: 12px; color: var(--ink-2); text-align: right; white-space: nowrap; }
+.errtxt { color: var(--crit); font-weight: 600; }
+.detail { position: sticky; top: 0; }
+.detail-body { padding: 12px; }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px 14px; margin-bottom: 12px; }
+.kv div span { display: block; font-size: 11px; color: var(--ink-3); }
+.sect { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3); margin: 12px 0 5px; }
+.errbox { background: var(--crit-wash); border: 1px solid var(--crit); border-radius: 6px; padding: 8px 10px;
+  font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.json { background: var(--sunk); border-radius: 6px; padding: 8px 10px; font-family: var(--mono);
+  font-size: 12px; line-height: 1.5; overflow: auto; max-height: 420px; overflow-wrap: anywhere; }
+.json details > summary { cursor: pointer; color: var(--ink-3); list-style: none; }
+.json details > summary::before { content: "\25B8  "; }
+.json details[open] > summary::before { content: "\25BE  "; }
+.j-kids { padding-left: 16px; border-left: 1px solid var(--line-2); margin-left: 3px; }
+.j-key { color: var(--ink-2); }
+.j-str { color: var(--ink); white-space: pre-wrap; }
+.j-num { color: var(--tool); }
+.j-nil { color: var(--ink-3); }
+.j-more { border: 0; background: none; color: var(--accent); padding: 0 4px; font: inherit; }
+
+/* ---- diff view */
+.fd { border: 1px solid var(--crit); border-left-width: 5px; border-radius: 8px; background: var(--surface);
+  padding: 14px 16px; margin-bottom: 16px; }
+.fd.clean { border-color: var(--good); }
+.fd .tag { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--crit); }
+.fd.clean .tag { color: var(--good-ink); }
+.fd h2 { font-size: 18px; margin: 3px 0 6px; font-weight: 650; }
+.fd p { margin: 0 0 8px; color: var(--ink-2); max-width: 78ch; }
+.fd .facts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.chg { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; table-layout: fixed; }
+.chg th { text-align: left; font-weight: 600; color: var(--ink-3); padding: 4px 8px; border-bottom: 1px solid var(--line-2); }
+.chg td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top;
+  font-family: var(--mono); overflow-wrap: anywhere; white-space: pre-wrap; }
+.chg td:first-child { color: var(--ink-2); }
+.chg col.p { width: 30%; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.side-card { padding: 10px 12px; }
+.side-card .who { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--ink-3); }
+.side-card a { color: inherit; font-weight: 600; }
+.drow { display: grid; grid-template-columns: 34px minmax(0, 1fr) 132px minmax(0, 1fr); gap: 0;
+  width: 100%; border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left;
+  padding: 0; align-items: stretch; }
+.drow:hover { background: var(--sunk); }
+.drow.first { box-shadow: inset 4px 0 0 var(--crit); background: var(--crit-wash); }
+.drow > * { padding: 7px 10px; min-width: 0; }
+.drow .n { color: var(--ink-3); font-size: 12px; text-align: right; }
+.drow .cell { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.drow .cell b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.drow .cell .q { color: var(--ink-3); font-size: 12px; }
+.drow .cell.none { background: repeating-linear-gradient(135deg, transparent 0 6px, var(--line) 6px 7px); }
+.drow .st { font-size: 12px; font-weight: 600; text-align: center; color: var(--ink-3); white-space: nowrap; }
+.drow.differs .st { color: var(--ink); }
+.st i { display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 4px; font-style: normal;
+  margin-right: 4px; background: var(--sunk); }
+.drow.differs .st i { background: var(--warn); color: #0b0b0b; }
+.drow.first .st i { background: var(--crit); color: #fff; }
+.dopen { border-bottom: 1px solid var(--line); padding: 12px; background: var(--page); }
+.dopen .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 1000px) { .dopen .two, .pair { grid-template-columns: 1fr; } }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+/* ---- misc */
+.empty { max-width: 640px; margin: 8vh auto; color: var(--ink-2); }
+.empty h1 { color: var(--ink); margin-bottom: 8px; }
+.empty pre { background: var(--sunk); border-radius: 8px; padding: 12px 14px; overflow: auto;
+  font-family: var(--mono); font-size: 12px; color: var(--ink); }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink);
+  color: var(--page); padding: 9px 14px; border-radius: 8px; font-size: 13px; z-index: 30; max-width: 80vw; }
+.save-row { display: flex; gap: 6px; align-items: center; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+        <rect x="1.5" y="1.5" width="19" height="19" rx="5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M5 13h3l2-6 3 9 2-5h2" fill="none" stroke="var(--llm)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      OnyxNode <small>agent flight recorder</small>
+    </div>
+    <div class="grow"></div>
+    <div class="conn" id="conn"><i></i><span>collector</span></div>
+    <button class="btn" id="theme" title="Switch light / dark">Theme</button>
+  </header>
+  <div class="shell">
+    <aside class="side">
+      <div class="side-head"><input class="field" id="q" type="search" placeholder="Filter runs by name or id" aria-label="Filter runs"></div>
+      <div class="runs" id="runs"></div>
+      <div class="compare" id="compare"></div>
+    </aside>
+    <main class="main" id="main"></main>
+  </div>
+</div>
+<script>
+"use strict";
+/* ---------- tiny DOM helper: h("div", {class:"x", onclick: fn}, child, ...) ---------- */
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "class") el.className = v;
+    else if (k === "style") el.style.cssText = v;
+    else if (k in el && k !== "list") el[k] = v;
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+const $ = (id) => document.getElementById(id);
+// replaceChildren() would print a bare null as the text "null"; drop empties first.
+function mount(el, ...kids) { el.replaceChildren(...kids.flat().filter((k) => k !== null && k !== undefined && k !== false)); }
+
+/* ---------- formatting ---------- */
+const fmt = {
+  dur(ms) {
+    if (ms === null || ms === undefined) return "";
+    if (ms < 1) return "<1 ms";
+    if (ms < 1000) return Math.round(ms) + " ms";
+    if (ms < 60000) return (ms / 1000).toFixed(2) + " s";
+    return Math.floor(ms / 60000) + "m " + String(Math.round(ms % 60000 / 1000)).padStart(2, "0") + "s";
+  },
+  at(ms) { return "+" + (ms < 1 ? "0 ms" : fmt.dur(ms)); },
+  cost(c) {
+    if (!c) return "$0";
+    return "$" + (c >= 1 ? c.toFixed(2) : c >= 0.01 ? c.toFixed(3) : c.toFixed(4));
+  },
+  int(n) { return (n || 0).toLocaleString("en-US"); },
+  ago(ts) {
+    if (!ts) return "";
+    const s = Math.max(0, Date.now() / 1000 - ts);
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + " min ago";
+    if (s < 86400) return Math.floor(s / 3600) + " h ago";
+    return new Date(ts * 1000).toLocaleDateString();
+  },
+  when(ts) { return ts ? new Date(ts * 1000).toLocaleString() : ""; },
+  signed(n, f) { return (n > 0 ? "+" : n < 0 ? "−" : "") + f(Math.abs(n)); },
+  compact(v, max) {
+    if (v === null || v === undefined) return "";
+    let t = typeof v === "string" ? v : JSON.stringify(v);
+    t = t.replace(/\s+/g, " ");
+    return t.length > max ? t.slice(0, max - 1) + "…" : t;
+  },
+};
+const KIND_LABEL = { run_start: "run start", run_end: "run end", llm_call: "LLM call",
+  tool_call: "tool call", decision: "decision", note: "note" };
+const STATUS = {
+  same: ["=", "same"], output_differs: ["≠", "output differs"], input_differs: ["≠", "input differs"],
+  only_a: ["A", "only in A"], only_b: ["B", "only in B"],
+};
+function kindBadge(kind) { return h("span", { class: "kind " + kind }, h("i"), KIND_LABEL[kind] || kind); }
+function badge(text, cls) { return h("span", { class: "badge " + (cls || text) }, text); }
+function statusBadge(s) {
+  const glyph = { ok: "✓ ", error: "✕ ", running: "● " }[s] || "";
+  return badge(glyph + s, s);
+}
+function preview(ev) {
+  if (ev.kind === "decision") {
+    const o = ev.output || {};
+    return "→ " + fmt.compact(o.choice, 60) + (o.reason ? "  (" + fmt.compact(o.reason, 80) + ")" : "");
+  }
+  if (ev.kind === "run_start") return fmt.compact(ev.input, 140);
+  if (ev.kind === "run_end") return fmt.compact(ev.output, 140);
+  const i = fmt.compact(ev.input, 70), o = fmt.compact(ev.output, 70);
+  return i + (o ? "  →  " + o : "");
+}
+
+/* ---------- API ---------- */
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) };
+  const res = await fetch(path, opt);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function toast(msg) {
+  document.querySelectorAll(".toast").forEach((t) => t.remove());
+  const t = h("div", { class: "toast", role: "status" }, msg);
+  document.body.append(t);
+  setTimeout(() => t.remove(), 5000);
+}
+
+/* ---------- state ---------- */
+const state = { runs: [], picked: [], route: {}, run: null, events: [], cursor: 0, timer: null,
+  speed: 1, diff: null, onlyDiff: false, open: new Set() };
+
+/* ---------- JSON tree ---------- */
+function tree(v, depth) {
+  depth = depth || 0;
+  if (v === null || v === undefined) return h("span", { class: "j-nil" }, "null");
+  if (typeof v === "string") {
+    const LIMIT = 1200;
+    if (v.length <= LIMIT) return h("span", { class: "j-str" }, v);
+    const span = h("span", { class: "j-str" }, v.slice(0, LIMIT) + "…");
+    const more = h("button", { class: "j-more", onclick: () => { span.textContent = v; more.remove(); } },
+      "show all " + fmt.int(v.length) + " chars");
+    return h("span", {}, span, more);
+  }
+  if (typeof v !== "object") return h("span", { class: "j-num" }, String(v));
+  const isArr = Array.isArray(v), keys = isArr ? v.map((_, i) => i) : Object.keys(v);
+  if (!keys.length) return h("span", { class: "j-nil" }, isArr ? "[]" : "{}");
+  const d = h("details", { open: depth < 3 },
+    h("summary", {}, isArr ? "[" + keys.length + "]" : "{" + keys.length + "}"),
+    h("div", { class: "j-kids" }, keys.map((k) =>
+      h("div", {}, h("span", { class: "j-key" }, isArr ? k + ": " : k + ": "), tree(v[k], depth + 1)))));
+  return d;
+}
+function payload(title, v) {
+  if (v === null || v === undefined) return null;
+  return [h("div", { class: "sect" }, title), h("div", { class: "json" }, tree(v))];
+}
+function eventDetail(ev, t0) {
+  if (!ev) return h("div", { class: "muted" }, "No step on this side.");
+  const facts = [["Step", "#" + ev.seq], ["At", fmt.at((ev.ts - t0) * 1000)]];
+  if (ev.duration_ms !== undefined) facts.push(["Took", fmt.dur(ev.duration_ms)]);
+  if (ev.tokens_in !== undefined || ev.tokens_out !== undefined)
+    facts.push(["Tokens in / out", fmt.int(ev.tokens_in) + " / " + fmt.int(ev.tokens_out)]);
+  if (ev.cost_usd !== undefined) facts.push(["Cost", fmt.cost(ev.cost_usd)]);
+  if (ev.status) facts.push(["Status", ev.status]);
+  if (ev.meta && ev.meta.replayed) facts.push(["Source", "answered from recording"]);
+  return h("div", {},
+    h("div", { style: "display:flex;gap:10px;align-items:baseline;margin-bottom:10px;flex-wrap:wrap" },
+      kindBadge(ev.kind), h("b", {}, ev.name)),
+    h("div", { class: "kv" }, facts.map(([k, v]) => h("div", { class: "num" }, h("span", {}, k), v))),
+    ev.error ? [h("div", { class: "sect" }, "✕ Error"), h("div", { class: "errbox" }, ev.error)] : null,
+    payload(ev.kind === "run_start" ? "Run input" : "Input", ev.input),
+    payload(ev.kind === "run_end" ? "Final output" : "Output", ev.output),
+    ev.meta && Object.keys(ev.meta).length ? payload("Meta", ev.meta) : null);
+}
+
+/* ---------- sidebar ---------- */
+function renderRuns() {
+  const box = $("runs");
+  box.replaceChildren();
+  if (!state.runs.length) {
+    box.append(h("div", { class: "muted", style: "padding:14px" },
+      $("q").value ? "No runs match." : "No runs recorded yet."));
+  }
+  for (const r of state.runs) {
+    const cur = state.route.run === r.run_id || state.route.a === r.run_id || state.route.b === r.run_id;
+    const cb = h("input", { type: "checkbox", checked: state.picked.includes(r.run_id),
+      title: "Pick for comparison", "aria-label": "Pick " + r.run_id + " for comparison",
+      onclick: (e) => { e.stopPropagation(); togglePick(r.run_id); } });
+    box.append(h("div", { class: "run-row" + (cur ? " current" : ""), onclick: () => go({ run: r.run_id }) },
+      cb,
+      h("div", { style: "min-width:0" },
+        h("div", { class: "run-name" }, h("span", { class: "t" }, r.name || "(unnamed)"),
+          statusBadge(r.status), r.label ? badge(r.label) : null),
+        h("div", { class: "run-meta num" }, fmt.ago(r.started_at), " · ", r.steps, " steps · ", fmt.cost(r.cost_usd)),
+        h("div", { class: "run-id mono" }, r.run_id))));
+  }
+  const c = $("compare");
+  c.replaceChildren(
+    state.picked.length === 2 ? "2 runs picked" : state.picked.length === 1 ? "Pick one more run" : "Tick two runs to compare",
+    h("button", { class: "btn primary", disabled: state.picked.length !== 2, onclick: compare }, "Find first divergence"));
+}
+function togglePick(id) {
+  const i = state.picked.indexOf(id);
+  if (i >= 0) state.picked.splice(i, 1);
+  else { state.picked.push(id); if (state.picked.length > 2) state.picked.shift(); }
+  renderRuns();
+}
+function compare() {
+  // A is the reference: the run labelled good, else the older of the two.
+  const [x, y] = state.picked.map((id) => state.runs.find((r) => r.run_id === id) || { run_id: id });
+  let a = x, b = y;
+  if (y.label === "good" || x.label === "bad") [a, b] = [y, x];
+  else if (x.label !== "good" && y.label !== "bad" && (y.started_at || 0) < (x.started_at || 0)) [a, b] = [y, x];
+  go({ a: a.run_id, b: b.run_id });
+}
+async function loadRuns() {
+  try {
+    const q = $("q").value.trim();
+    const data = await api("/api/runs" + (q ? "?q=" + encodeURIComponent(q) : ""));
+    $("conn").className = "conn";
+    const sig = JSON.stringify(data.runs);
+    if (sig !== loadRuns.sig) { loadRuns.sig = sig; state.runs = data.runs; renderRuns(); }
+    if (!location.hash && state.runs.length && !state.route.run) go({ run: state.runs[0].run_id });
+    const open = state.run && state.runs.find((r) => r.run_id === state.run.run_id);
+    if (open && state.route.run && (open.status !== state.run.status || open.steps !== state.run.steps)) showRun(open.run_id, true);
+  } catch (e) { $("conn").className = "conn down"; }
+}
+
+/* ---------- routing ---------- */
+function go(route) {
+  const parts = Object.entries(route).filter(([, v]) => v).map(([k, v]) => k + "=" + encodeURIComponent(v));
+  const hash = "#" + parts.join("&");
+  if (location.hash === hash) onRoute(); else location.hash = hash;
+}
+function onRoute() {
+  const route = {};
+  for (const part of location.hash.slice(1).split("&")) {
+    const i = part.indexOf("=");
+    if (i > 0) route[part.slice(0, i)] = decodeURIComponent(part.slice(i + 1));
+  }
+  state.route = route;
+  stop();
+  renderRuns();
+  if (route.a && route.b) showDiff(route.a, route.b, route.ignore || "");
+  else if (route.run) showRun(route.run);
+  else showEmpty();
+}
+function showEmpty() {
+  $("main").replaceChildren(h("div", { class: "empty" },
+    h("h1", {}, "Nothing recorded yet"),
+    h("p", {}, "Record the built-in demo agent to see a good run, a bad run, and where they split:"),
+    h("pre", {}, "onyx demo"),
+    h("p", {}, "Or record your own agent:"),
+    h("pre", {}, 'import onyxnode\n\nrec = onyxnode.Recorder("my-agent")\nwith rec.start(input=task) as run:\n    data = run.tool("search", search, query=task)\n    text = run.llm("my-model", call_model, messages)\n    run.decision("route", choice="answer")\n    run.finish(output=text)'),
+    h("p", {}, "Runs appear here as they are written.")));
+}
+
+/* ---------- run view ---------- */
+async function showRun(id, keepCursor) {
+  let data;
+  try { data = await api("/api/runs/" + encodeURIComponent(id)); }
+  catch (e) { $("main").replaceChildren(h("div", { class: "empty" }, h("h1", {}, "Run not found"), h("p", {}, e.message))); return; }
+  if (state.route.run !== id) return;
+  const sameRun = keepCursor && state.run && state.run.run_id === data.run.run_id;
+  const atEnd = state.cursor >= state.events.length - 1;
+  state.run = data.run; state.events = data.events;
+  state.cursor = sameRun && !atEnd ? Math.min(state.cursor, data.events.length - 1) : data.events.length - 1;
+  renderRun();
+}
+function renderRun() {
+  const r = state.run, evs = state.events;
+  const t0 = r.started_at || 0, total = Math.max((r.ended_at || t0) - t0, 0.001);
+  const labelBtn = (l) => h("button", { class: "btn" + (r.label === l ? " on" : ""), "aria-pressed": r.label === l,
+    onclick: async () => { const d = await api("/api/runs/" + r.run_id + "/label", { label: r.label === l ? null : l });
+      state.run = d.run; loadRuns.sig = null; await loadRuns(); renderRun(); } },
+    l === "good" ? "✓ Good" : "✕ Bad");
+  const saveBox = h("div", { class: "save-row" });
+  const saveBtn = h("button", { class: "btn", onclick: () => {
+    const name = h("input", { class: "field", value: (r.name || "run") + "-" + r.run_id.slice(-6), "aria-label": "Case name" });
+    const doSave = async () => {
+      try { const d = await api("/api/suite", { run_id: r.run_id, name: name.value });
+        toast("Saved regression case " + d.name + ". Replay it with: onyx suite run --agent module:function");
+        saveBox.replaceChildren(saveBtn);
+      } catch (e) { toast("Could not save: " + e.message); }
+    };
+    saveBox.replaceChildren(name, h("button", { class: "btn primary", onclick: doSave }, "Save case"),
+      h("button", { class: "btn", onclick: () => saveBox.replaceChildren(saveBtn) }, "Cancel"));
+    name.focus(); name.select();
+  } }, "Save as regression case");
+  saveBox.append(saveBtn);
+
+  const tile = (l, v, d) => h("div", { class: "tile" }, h("div", { class: "l" }, l), h("div", { class: "v" }, v), d ? h("div", { class: "d" }, d) : null);
+  const tiles = h("div", { class: "tiles" },
+    tile("Duration", fmt.dur(total * 1000)), tile("Steps", fmt.int(r.steps), r.errors ? r.errors + " failed" : null),
+    tile("LLM calls", fmt.int(r.llm_calls)), tile("Tool calls", fmt.int(r.tool_calls)),
+    tile("Tokens", fmt.int(r.tokens_in + r.tokens_out), fmt.int(r.tokens_in) + " in · " + fmt.int(r.tokens_out) + " out"),
+    tile("Cost", fmt.cost(r.cost_usd)));
+
+  /* time track: one lane per kind, marks placed by start time */
+  const lanes = [["llm_call", "LLM"], ["tool_call", "Tools"], ["decision", "Decisions"]];
+  const laneEls = {};
+  const grid = h("div", { class: "lanes" });
+  for (const [kind, label] of lanes) {
+    laneEls[kind] = h("div", { class: "lane" });
+    grid.append(h("div", { class: "lane-l" }, label), laneEls[kind]);
+  }
+  const tip = h("div", { class: "tip", hidden: true });
+  evs.forEach((ev, i) => {
+    const lane = laneEls[ev.kind];
+    if (!lane) return;
+    const left = ((ev.ts - t0) / total) * 100, width = ((ev.duration_ms || 0) / 1000 / total) * 100;
+    const point = ev.kind === "decision";
+    const m = h("button", { class: "mark " + ev.kind + (ev.error ? " err" : ""), "data-i": i,
+      "aria-label": (KIND_LABEL[ev.kind] || ev.kind) + " " + ev.name,
+      style: point ? "left:calc(" + left + "% - 7px);width:14px" : "left:" + left + "%;width:" + width + "%",
+      onclick: () => setCursor(i),
+      onmousemove: (e) => { tip.hidden = false;
+        tip.replaceChildren(h("b", {}, (KIND_LABEL[ev.kind] || ev.kind) + " · " + ev.name),
+          fmt.at((ev.ts - t0) * 1000) + (ev.duration_ms ? " · took " + fmt.dur(ev.duration_ms) : "") +
+          (ev.cost_usd ? " · " + fmt.cost(ev.cost_usd) : "") + (ev.error ? " · ✕ failed" : ""));
+        tip.style.left = Math.min(e.clientX + 12, innerWidth - 330) + "px"; tip.style.top = (e.clientY + 14) + "px"; },
+      onmouseleave: () => { tip.hidden = true; } }, h("i"));
+    lane.append(m);
+  });
+  const cursorEl = h("div", { class: "cursor" });
+  const cursorLane = h("div", { style: "position:relative;grid-column:2;height:0" }, cursorEl);
+  grid.append(h("div"), cursorLane);
+  const axis = h("div", { class: "axis" }, [0, .25, .5, .75, 1].map((f) =>
+    h("span", { style: "left:" + f * 100 + "%" }, f ? fmt.dur(total * 1000 * f) : "0")));
+  const range = h("input", { type: "range", min: 0, max: Math.max(evs.length - 1, 0), value: state.cursor,
+    "aria-label": "Replay position", oninput: (e) => { stop(); setCursor(+e.target.value); } });
+  const playBtn = h("button", { class: "btn icon", title: "Play / pause replay", onclick: () => state.timer ? stop() : play() }, "▶");
+  const readout = h("div", { class: "readout num" });
+  const replay = h("div", { class: "replay" },
+    h("button", { class: "btn icon", title: "First step", onclick: () => { stop(); setCursor(0); } }, "⏮"),
+    h("button", { class: "btn icon", title: "Previous step", onclick: () => { stop(); setCursor(state.cursor - 1); } }, "◀"),
+    playBtn,
+    h("button", { class: "btn icon", title: "Next step", onclick: () => { stop(); setCursor(state.cursor + 1); } }, "▶❘"),
+    h("select", { class: "field", "aria-label": "Replay speed", onchange: (e) => { state.speed = +e.target.value; if (state.timer) { stop(); play(); } } },
+      [1, 2, 4].map((s) => h("option", { value: s, selected: state.speed === s }, s + "×"))),
+    range, readout);
+
+  const list = h("div", {});
+  evs.forEach((ev, i) => {
+    list.append(h("button", { class: "step", "data-i": i, onclick: () => { stop(); setCursor(i); } },
+      h("span", { class: "muted num" }, ev.seq),
+      h("span", { class: "muted num", style: "font-size:12px" }, fmt.at((ev.ts - t0) * 1000)),
+      kindBadge(ev.kind),
+      h("span", { class: "nm" }, ev.name, ev.error ? h("span", { class: "errtxt" }, "  ✕ failed") : null,
+        h("span", { class: "pv" }, ev.error || preview(ev))),
+      h("span", { class: "rt num" }, [fmt.dur(ev.duration_ms), ev.cost_usd ? fmt.cost(ev.cost_usd) : ""].filter(Boolean).join(" · "))));
+  });
+  const detailBody = h("div", { class: "detail-body" });
+
+  mount($("main"),
+    h("div", { class: "head" }, h("h1", {}, r.name || "(unnamed run)"), statusBadge(r.status),
+      r.meta && r.meta.replay_of ? badge("replay of " + r.meta.replay_of, "") : null,
+      h("div", { class: "grow" }), labelBtn("good"), labelBtn("bad"), saveBox),
+    h("div", { class: "sub mono" }, r.run_id, "  ·  ", fmt.when(r.started_at), (r.tags || []).map((t) => "  #" + t)),
+    r.error ? h("div", { class: "errbox", style: "margin-bottom:16px" }, "✕ Run failed: " + r.error) : null,
+    tiles,
+    h("div", { class: "card" }, h("div", { class: "card-head" }, "Timeline"),
+      h("div", { class: "track" }, grid, h("div", { class: "lanes" }, h("div"), axis)), replay),
+    h("div", { class: "cols" },
+      h("div", { class: "card" }, h("div", { class: "card-head" }, "Steps", h("span", { class: "muted", style: "font-weight:400" }, evs.length + " events")), list),
+      h("div", { class: "card detail" }, h("div", { class: "card-head" }, "Step detail"), detailBody)),
+    tip);
+
+  renderRun.apply = () => {
+    const i = state.cursor, ev = evs[i];
+    document.querySelectorAll(".step, .mark").forEach((el) => {
+      const j = +el.dataset.i;
+      el.classList.toggle("future", j > i);
+      el.classList.toggle("sel", j === i);
+    });
+    range.value = i;
+    playBtn.textContent = state.timer ? "⏸" : "▶";
+    if (!ev) { detailBody.replaceChildren(h("div", { class: "muted" }, "No events yet.")); return; }
+    cursorEl.style.left = "calc(" + Math.min(Math.max(((ev.ts - t0) / total) * 100, 0), 100) + "% - 1px)";
+    cursorEl.style.top = "-" + (lanes.length * 26 + 3) + "px"; cursorEl.style.bottom = "-3px";
+    let cost = 0, tok = 0;
+    for (let k = 0; k <= i; k++) { cost += evs[k].cost_usd || 0; tok += (evs[k].tokens_in || 0) + (evs[k].tokens_out || 0); }
+    readout.textContent = "event " + (i + 1) + " of " + evs.length + "  ·  " + fmt.at((ev.ts - t0) * 1000) +
+      "  ·  " + fmt.int(tok) + " tokens  ·  " + fmt.cost(cost) + " so far";
+    detailBody.replaceChildren(eventDetail(ev, t0));
+  };
+  renderRun.apply();
+}
+function setCursor(i) {
+  state.cursor = Math.min(Math.max(i, 0), state.events.length - 1);
+  if (renderRun.apply) renderRun.apply();
+  const row = document.querySelector('.step[data-i="' + state.cursor + '"]');
+  if (row && state.timer) row.scrollIntoView({ block: "nearest" });
+}
+function play() {
+  if (!state.events.length) return;
+  if (state.cursor >= state.events.length - 1) state.cursor = -1;
+  const tick = () => {
+    if (state.cursor >= state.events.length - 1) { stop(); return; }
+    setCursor(state.cursor + 1);
+  };
+  state.timer = setInterval(tick, 700 / state.speed);
+  tick();
+}
+function stop() {
+  if (state.timer) { clearInterval(state.timer); state.timer = null; }
+  if (state.route.run && renderRun.apply && state.events.length) renderRun.apply();
+}
+
+/* ---------- diff view ---------- */
+async function showDiff(a, b, ignore) {
+  $("main").replaceChildren(h("div", { class: "muted" }, "Comparing…"));
+  let d;
+  try { d = await api("/api/diff?a=" + encodeURIComponent(a) + "&b=" + encodeURIComponent(b) + (ignore ? "&ignore=" + encodeURIComponent(ignore) : "")); }
+  catch (e) { $("main").replaceChildren(h("div", { class: "empty" }, h("h1", {}, "Could not compare"), h("p", {}, e.message))); return; }
+  if (state.route.a !== a || state.route.b !== b) return;
+  state.diff = d; state.open = new Set();
+  if (d.first_divergence) state.open.add(d.first_divergence.row);
+  renderDiff();
+}
+function changesTable(changes) {
+  if (!changes || !changes.length) return null;
+  return h("table", { class: "chg" },
+    h("colgroup", {}, h("col", { class: "p" }), h("col"), h("col")),
+    h("thead", {}, h("tr", {}, h("th", {}, "Field"), h("th", {}, "Run A"), h("th", {}, "Run B"))),
+    h("tbody", {}, changes.map((c) => h("tr", {}, h("td", {}, c.path || "(value)"),
+      h("td", {}, c.op === "added" ? h("span", { class: "muted" }, "(absent)") : fmt.compact(c.a, 400)),
+      h("td", {}, c.op === "removed" ? h("span", { class: "muted" }, "(absent)") : fmt.compact(c.b, 400))))));
+}
+function renderDiff() {
+  const d = state.diff, fd = d.first_divergence, route = state.route;
+  const byseq = (evs) => Object.fromEntries(evs.map((e) => [e.seq, e]));
+  const A = byseq(d.events_a), B = byseq(d.events_b);
+  const side = (who, s) => h("div", { class: "card side-card" },
+    h("div", { class: "who" }, "RUN " + who + (who === "A" ? " · REFERENCE" : " · COMPARED")),
+    h("div", { style: "display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:2px 0" },
+      h("a", { href: "#run=" + s.run_id }, s.name || "(unnamed)"), statusBadge(s.status), s.label ? badge(s.label) : null),
+    h("div", { class: "mono muted" }, s.run_id),
+    h("div", { class: "num", style: "font-size:12px;color:var(--ink-2);margin-top:4px" },
+      s.steps + " steps · " + fmt.int(s.tokens_in + s.tokens_out) + " tokens · " + fmt.cost(s.cost_usd)));
+
+  let banner;
+  if (!fd) {
+    banner = h("div", { class: "fd clean" }, h("div", { class: "tag" }, "✓ No divergence"),
+      h("h2", {}, "These runs did the same thing"),
+      h("p", {}, "All " + d.rows.length + " compared steps have identical inputs and outputs. Timing, tokens and cost are not compared."));
+  } else {
+    banner = h("div", { class: "fd" },
+      h("div", { class: "tag" }, "◆ First divergence · row " + fd.row),
+      h("h2", {}, fd.headline), h("p", {}, fd.why),
+      changesTable(fd.changes),
+      h("div", { class: "facts" },
+        badge(fd.matched_before + " steps identical before", ""),
+        badge(fd.downstream_differences + " later steps also differ", ""),
+        h("button", { class: "btn", onclick: () => { state.open.add(fd.row); renderDiff();
+          const el = document.querySelector('.drow[data-i="' + fd.row + '"]'); if (el) el.scrollIntoView({ block: "center", behavior: "smooth" }); } },
+          "Show this step")));
+  }
+  const c = d.counts, delta = d.delta;
+  const ignoreIn = h("input", { class: "field mono", style: "width:240px", value: route.ignore || "",
+    placeholder: "output.request_id, input.now", "aria-label": "Fields to ignore",
+    onkeydown: (e) => { if (e.key === "Enter") go({ a: route.a, b: route.b, ignore: e.target.value.replace(/\s+/g, "") }); } });
+
+  const table = h("div", {});
+  const t0a = d.a.started_at || 0, t0b = d.b.started_at || 0;
+  for (const row of d.rows) {
+    if (state.onlyDiff && row.status === "same") continue;
+    const ea = row.a === null ? null : A[row.a], eb = row.b === null ? null : B[row.b];
+    const isFirst = fd && fd.row === row.i;
+    const cell = (ev) => ev
+      ? h("span", { class: "cell" }, h("span", { class: "muted num", style: "font-size:12px" }, "#" + ev.seq), kindBadge(ev.kind),
+          h("b", {}, ev.name), h("span", { class: "q", style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0" },
+            ev.kind === "decision" ? "→ " + fmt.compact((ev.output || {}).choice, 40) : ""))
+      : h("span", { class: "cell none" });
+    const [glyph, label] = STATUS[row.status];
+    const btn = h("button", { class: "drow" + (row.status !== "same" ? " differs" : "") + (isFirst ? " first" : ""),
+      "data-i": row.i, "aria-expanded": state.open.has(row.i),
+      onclick: () => { state.open.has(row.i) ? state.open.delete(row.i) : state.open.add(row.i); renderDiff.keepScroll = true; renderDiff(); } },
+      h("span", { class: "n num" }, row.i), cell(ea),
+      h("span", { class: "st" }, h("i", {}, glyph), isFirst ? "first divergence" : label), cell(eb));
+    table.append(btn);
+    if (state.open.has(row.i)) {
+      table.append(h("div", { class: "dopen" },
+        isFirst ? null : changesTable(row.changes),
+        h("div", { class: "two", style: row.changes && !isFirst ? "margin-top:12px" : "" },
+          h("div", { class: "card", style: "padding:12px" }, h("div", { class: "sect", style: "margin-top:0" }, "Run A"), eventDetail(ea, t0a)),
+          h("div", { class: "card", style: "padding:12px" }, h("div", { class: "sect", style: "margin-top:0" }, "Run B"), eventDetail(eb, t0b)))));
+    }
+  }
+  const main = $("main"), scroll = main.scrollTop;
+  mount(main,
+    h("div", { class: "head" }, h("h1", {}, "Run diff"), h("div", { class: "grow" }),
+      h("button", { class: "btn", onclick: () => go({ a: route.b, b: route.a, ignore: route.ignore }) }, "⇄ Swap A and B")),
+    h("div", { class: "sub" }, "A is the reference run; the diff explains how B departs from it."),
+    h("div", { class: "pair" }, side("A", d.a), side("B", d.b)),
+    banner,
+    h("div", { class: "tiles" },
+      h("div", { class: "tile" }, h("div", { class: "l" }, "Steps, B vs A"), h("div", { class: "v" }, fmt.signed(delta.steps, fmt.int))),
+      h("div", { class: "tile" }, h("div", { class: "l" }, "Tokens, B vs A"), h("div", { class: "v" }, fmt.signed(delta.tokens, fmt.int))),
+      h("div", { class: "tile" }, h("div", { class: "l" }, "Cost, B vs A"), h("div", { class: "v" }, fmt.signed(delta.cost_usd, fmt.cost))),
+      h("div", { class: "tile" }, h("div", { class: "l" }, "Duration, B vs A"), h("div", { class: "v" }, fmt.signed(delta.duration_s * 1000, fmt.dur) || "0"))),
+    h("div", { class: "card" },
+      h("div", { class: "card-head" }, "Aligned steps",
+        h("div", { class: "chips", style: "font-weight:400" },
+          badge(c.same + " same", ""), badge("≠ " + (c.output_differs + c.input_differs) + " differ", c.output_differs + c.input_differs ? "running" : ""),
+          badge(c.only_a + " only in A", ""), badge(c.only_b + " only in B", "")),
+        h("div", { class: "grow" }),
+        h("label", { style: "font-weight:400;font-size:12px;display:flex;gap:6px;align-items:center" }, "Ignore fields", ignoreIn),
+        h("button", { class: "btn" + (state.onlyDiff ? " on" : ""), "aria-pressed": state.onlyDiff,
+          onclick: () => { state.onlyDiff = !state.onlyDiff; renderDiff(); } }, "Only differences")),
+      table));
+  if (renderDiff.keepScroll) { main.scrollTop = scroll; renderDiff.keepScroll = false; }
+}
+
+/* ---------- boot ---------- */
+$("theme").addEventListener("click", () => {
+  const dark = getComputedStyle(document.documentElement).colorScheme.includes("dark");
+  const next = dark ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("onyx-theme", next); } catch (e) {}
+});
+try { const t = localStorage.getItem("onyx-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+let qTimer;
+$("q").addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(loadRuns, 200); });
+window.addEventListener("hashchange", onRoute);
+document.addEventListener("keydown", (e) => {
+  if (!state.route.run || /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  if (e.key === "ArrowRight") { stop(); setCursor(state.cursor + 1); }
+  else if (e.key === "ArrowLeft") { stop(); setCursor(state.cursor - 1); }
+  else if (e.key === " " && e.target === document.body) { e.preventDefault(); state.timer ? stop() : play(); }
+});
+onRoute();
+loadRuns();
+setInterval(loadRuns, 3000);
+</script>
+</body>
+</html>

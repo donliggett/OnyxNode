@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onyxnode"
+version = "0.1.0"
+description = "Black-box flight recorder for AI agent runs: record, replay, diff, and find the first divergence."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+onyx = "onyxnode.cli:main"
+
+[tool.setuptools]
+packages = ["onyxnode"]
+
+[tool.setuptools.package-data]
+onyxnode = ["ui/*.html"]
